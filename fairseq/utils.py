@@ -544,6 +544,26 @@ def deprecation_warning(message, stacklevel=3):
 def relu_squared(x: torch.Tensor):
     return F.relu(x).pow(2)
 
+def get_sparsing_fn(activation: str, hardshrink_lambda: float) -> Callable:
+    """Returns the sparsing activation function corresponding to `activation`"""
+    if activation == "relu":
+        return torch.nn.ReLU()
+    if activation == "hardshrink":
+        return torch.nn.Hardshrink(hardshrink_lambda)
+    else:
+        raise RuntimeError("--sparsing-fn {} not supported".format(activation))
+
+def get_available_sparsing_fns() -> List:
+    return [
+        "relu", 
+        "hardshrink"
+    ]
+
+def calc_sparsity(net_activation):
+    net_activation = net_activation.detach()
+    num_nonzero = torch.count_nonzero(net_activation.detach())
+    percent_zero = 100.0 * (1.0 - (num_nonzero / net_activation.numel()))
+    return percent_zero.item()
 
 def get_activation_fn(activation: str) -> Callable:
     """Returns the activation function corresponding to `activation`"""

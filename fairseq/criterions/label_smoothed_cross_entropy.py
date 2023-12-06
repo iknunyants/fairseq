@@ -89,6 +89,16 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
             "nsentences": sample["target"].size(0),
             "sample_size": sample_size,
         }
+
+        if not model.training:
+            enc_sparsity = model.encoder.sparse_stats
+            for module in enc_sparsity.keys():
+                logging_output[f'sparsity_{module}'] = enc_sparsity[module]
+
+            dec_sparsity = model.decoder.sparse_stats
+            for module in dec_sparsity.keys():
+                logging_output[f'sparsity_{module}'] = dec_sparsity[module]
+
         if self.report_accuracy:
             n_correct, total = self.compute_accuracy(model, net_output, sample)
             logging_output["n_correct"] = utils.item(n_correct.data)
@@ -132,6 +142,9 @@ class LabelSmoothedCrossEntropyCriterion(FairseqCriterion):
         ntokens = sum(log.get("ntokens", 0) for log in logging_outputs)
         sample_size = sum(log.get("sample_size", 0) for log in logging_outputs)
 
+        for sparsity_type in [s for s in logging_outputs[0] if s.startswith('sparsity_')]:
+            sparsity_sum = sum(log.get(sparsity_type, 0) for log in logging_outputs)
+            metrics.log_scalar(sparsity_type, sparsity_sum / len(logging_outputs), round=3)
         metrics.log_scalar(
             "loss", loss_sum / sample_size / math.log(2), sample_size, round=3
         )

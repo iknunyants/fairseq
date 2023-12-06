@@ -153,6 +153,12 @@ class TransformerModel(TransformerModelBase):
 
 # architectures
 
+@register_model_architecture("transformer", "transformer_sparse")
+def transformer_sparse(args):
+    args.sparse_proj = getattr(args, "sparse_proj", False)
+    args.sparsing_fn = getattr(args, "sparsing_fn", 'relu')
+    base_architecture(args)
+
 
 @register_model_architecture("transformer", "transformer_tiny")
 def tiny_architecture(args):

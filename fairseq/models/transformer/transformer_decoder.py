@@ -139,6 +139,8 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         if self.output_projection is None:
             self.build_output_projection(cfg, dictionary, embed_tokens)
 
+        self.sparse_stats = {}
+        
     def build_output_projection(self, cfg, dictionary, embed_tokens):
         if cfg.adaptive_softmax_cutoff is not None:
             self.adaptive_softmax = AdaptiveSoftmax(
@@ -328,6 +330,9 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         if self.cross_self_attention or prev_output_tokens.eq(self.padding_idx).any():
             self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
+        if not self.training and self.cfg.sparse_proj:
+                self.sparse_stats = {}
+
         # decoder layers
         attn: Optional[Tensor] = None
         inner_states: List[Optional[Tensor]] = [x]
@@ -347,6 +352,11 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 need_attn=bool((idx == alignment_layer)),
                 need_head_weights=bool((idx == alignment_layer)),
             )
+
+            if not self.training and self.cfg.sparse_proj:
+                for key in layer.sparse_stats.keys():
+                    self.sparse_stats["{module}/layer_{layer_num}".format(module=key, layer_num=idx)] = layer.sparse_stats[key]
+            
             inner_states.append(x)
             if layer_attn is not None and idx == alignment_layer:
                 attn = layer_attn.float().to(x)

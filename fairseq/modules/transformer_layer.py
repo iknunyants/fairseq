@@ -38,6 +38,10 @@ class TransformerEncoderLayerBase(nn.Module):
         self.embed_dim = cfg.encoder.embed_dim
         self.quant_noise = cfg.quant_noise.pq
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
+
+        self.sparse_proj = cfg.sparse_proj
+        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda)
+
         self.self_attn = self.build_self_attention(self.embed_dim, cfg)
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
         self.dropout_module = FairseqDropout(
@@ -66,6 +70,8 @@ class TransformerEncoderLayerBase(nn.Module):
         )
 
         self.final_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
+
+        self.sparse_stats = {}
 
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(
@@ -191,6 +197,11 @@ class TransformerEncoderLayerBase(nn.Module):
                 attn_mask.to(torch.bool), -1e8 if x.dtype == torch.float32 else -1e4
             )
 
+        if self.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats = {'enc_proj': utils.calc_sparsity(x)}
+
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
@@ -207,10 +218,19 @@ class TransformerEncoderLayerBase(nn.Module):
         if not self.normalize_before:
             x = self.self_attn_layer_norm(x)
 
+        if self.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats['enc_fc1'] = utils.calc_sparsity(x)
+
         residual = x
         if self.normalize_before:
             x = self.final_layer_norm(x)
         x = self.activation_fn(self.fc1(x))
+
+        if not self.training:
+            self.sparse_stats['enc_fc2'] = utils.calc_sparsity(x)
+    
         x = self.activation_dropout_module(x)
         x = self.fc2(x)
 
@@ -267,6 +287,9 @@ class TransformerDecoderLayerBase(nn.Module):
         self.quant_noise_block_size = cfg.quant_noise.pq_block_size
 
         self.cross_self_attention = cfg.cross_self_attention
+        
+        self.sparse_proj = cfg.sparse_proj
+        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda)
 
         self.self_attn = self.build_self_attention(
             self.embed_dim,
@@ -341,6 +364,8 @@ class TransformerDecoderLayerBase(nn.Module):
 
         self.onnx_trace = False
 
+        self.sparse_stats = {}
+
     def build_fc1(self, input_dim, output_dim, q_noise, qn_block_size):
         return quant_noise(nn.Linear(input_dim, output_dim), q_noise, qn_block_size)
 
@@ -410,6 +435,11 @@ class TransformerDecoderLayerBase(nn.Module):
         if need_head_weights:
             need_attn = True
 
+        if self.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats = {'dec_proj': utils.calc_sparsity(x)}
+
         residual = x
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
@@ -469,6 +499,11 @@ class TransformerDecoderLayerBase(nn.Module):
         if not self.normalize_before:
             x = self.self_attn_layer_norm(x)
 
+        if self.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats['dec_cross'] = utils.calc_sparsity(x)
+
         if self.encoder_attn is not None and encoder_out is not None:
             residual = x
             if self.normalize_before:
@@ -499,11 +534,20 @@ class TransformerDecoderLayerBase(nn.Module):
             if not self.normalize_before:
                 x = self.encoder_attn_layer_norm(x)
 
+        if self.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats['dec_fc1'] = utils.calc_sparsity(x)
+                
         residual = x
         if self.normalize_before:
             x = self.final_layer_norm(x)
 
         x = self.activation_fn(self.fc1(x))
+        
+        if not self.training:
+            self.sparse_stats['dec_fc2'] = utils.calc_sparsity(x)
+
         x = self.activation_dropout_module(x)
         if self.ffn_layernorm is not None:
             x = self.ffn_layernorm(x)

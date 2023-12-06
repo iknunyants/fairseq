@@ -95,6 +95,14 @@ class QuantNoiseConfig(FairseqDataclass):
 
 @dataclass
 class TransformerConfig(FairseqDataclass):
+    sparse_proj: bool = False
+    sparsing_fn: ChoiceEnum(utils.get_available_sparsing_fns()) = field(
+        default="relu",
+        metadata={"help": "sparsing activation function to use"},
+    )
+    hardshrink_lambda: float = field(
+        default=0.5, metadata={"help": "hardshrink lambda value"}
+    )
     activation_fn: ChoiceEnum(utils.get_available_activation_fns()) = field(
         default="relu",
         metadata={"help": "activation function to use"},

@@ -102,6 +102,9 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.layer_norm = None
 
+        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda)
+        self.sparse_stats = {}
+
     def build_encoder_layer(self, cfg):
         layer = transformer_layer.TransformerEncoderLayerBase(
             cfg, return_fc=self.return_fc
@@ -225,11 +228,19 @@ class TransformerEncoderBase(FairseqEncoder):
         if return_all_hiddens:
             encoder_states.append(x)
 
+        if not self.training and self.cfg.sparse_proj:
+                self.sparse_stats = {}
+
         # encoder layers
-        for layer in self.layers:
+        for idx, layer in enumerate(self.layers):
             lr = layer(
                 x, encoder_padding_mask=encoder_padding_mask if has_pads else None
             )
+
+            if not self.training and self.cfg.sparse_proj:
+                for key in layer.sparse_stats.keys():
+                    self.sparse_stats["{module}/layer_{layer_num}".format(module=key, layer_num=idx)] = layer.sparse_stats[key]
+                
 
             if isinstance(lr, tuple) and len(lr) == 2:
                 x, fc_result = lr
@@ -244,6 +255,11 @@ class TransformerEncoderBase(FairseqEncoder):
 
         if self.layer_norm is not None:
             x = self.layer_norm(x)
+
+        if self.cfg.sparse_proj:
+            x = self.sparsing_fn(x)
+            if not self.training:
+                self.sparse_stats['encoder_out'] = utils.calc_sparsity(x)
 
         # The Pytorch Mobile lite interpreter does not supports returning NamedTuple in
         # `forward` so we use a dictionary instead.
