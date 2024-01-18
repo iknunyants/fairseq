@@ -3,7 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-
+import copy
 import re
 from dataclasses import dataclass, field, fields
 from typing import List, Optional
@@ -95,13 +95,32 @@ class QuantNoiseConfig(FairseqDataclass):
 
 @dataclass
 class TransformerConfig(FairseqDataclass):
-    sparse_proj: bool = False
+    dense_input: bool = field(
+        default=False, metadata={"help": "use dense input"}
+    )
+    # disable_sparsity_layers: Optional[List[int]] = field(
+    #     default=None,
+    #     metadata={
+    #         "help": "list of layers to disable sparsity in. If None, all layers are sparse"
+    #     },
+    # )
+    # disable_sparsity_layers_level: int = field(
+    #     default=3,
+    #     metadata={"help": "Level of sparsity to disable in the layers. 1: preproj, 2: preproj+fcs, 3: preproj+fcs+atten"},
+    # )
+    dense_residuals: bool = field(
+        default=False,
+        metadata={"help": "if true, not sparsifying the residual connections"},
+    )
+    sparse_preproj: bool = False
+    sparse_attention: bool = False
+    sparse_fcs: bool = False
     sparsing_fn: ChoiceEnum(utils.get_available_sparsing_fns()) = field(
         default="relu",
         metadata={"help": "sparsing activation function to use"},
     )
     hardshrink_lambda: float = field(
-        default=0.5, metadata={"help": "hardshrink lambda value"}
+        default=0.1, metadata={"help": "hardshrink lambda value"}
     )
     activation_fn: ChoiceEnum(utils.get_available_activation_fns()) = field(
         default="relu",
@@ -347,3 +366,24 @@ class TransformerConfig(FairseqDataclass):
             return config
         else:
             return args
+        
+    # def disable_sparsity_copy(self):
+    #     """
+    #     return a copy of the config with sparsity disabled
+    #     """
+    #     cfg_copy = copy.deepcopy(self)
+    #     if self.disable_sparsity_layers_level >= 1:    
+    #         cfg_copy.sparse_preproj = False
+    #     if self.disable_sparsity_layers_level >= 2:
+    #         cfg_copy.sparse_fcs = False
+    #     if self.disable_sparsity_layers_level == 3:
+    #         cfg_copy.sparse_attention = False
+    #     return cfg_copy
+    
+    def sparse_input_copy(self):
+        """
+        return a copy of the config with dense input
+        """
+        cfg_copy = copy.deepcopy(self)
+        cfg_copy.dense_input = False
+        return cfg_copy

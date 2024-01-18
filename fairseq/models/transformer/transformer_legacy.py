@@ -155,8 +155,15 @@ class TransformerModel(TransformerModelBase):
 
 @register_model_architecture("transformer", "transformer_sparse")
 def transformer_sparse(args):
-    args.sparse_proj = getattr(args, "sparse_proj", False)
+    args.sparse_preproj = getattr(args, "sparse_preproj", False)
+    args.sparse_attention = getattr(args, "sparse_attention", False)
+    args.sparse_fcs = getattr(args, "sparse_fcs", False)
     args.sparsing_fn = getattr(args, "sparsing_fn", 'relu')
+    args.hardshrink_lambda = getattr(args, "hardshrink_lambda", 0.1)
+    # args.disable_sparsity_layers = getattr(args, "disable_sparsity_layers", None)
+    # args.disable_sparsity_layers_level = getattr(args, "disable_sparsity_layers_level", 3)
+    args.dense_residuals = getattr(args, "dense_residuals", False)
+    args.dense_input = getattr(args, "dense_input", False)
     base_architecture(args)
 
 

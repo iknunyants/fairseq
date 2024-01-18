@@ -115,12 +115,22 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
             self.layers = LayerDropModuleList(p=self.decoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend(
-            [
-                self.build_decoder_layer(cfg, no_encoder_attn)
-                for _ in range(cfg.decoder.layers)
-            ]
-        )
+        for i in range(cfg.decoder.layers):
+            if cfg.dense_input:
+                if i == 0:
+                    self.layers.append(
+                        self.build_decoder_layer(cfg, no_encoder_attn)
+                    )
+                else:
+                    self.layers.append(
+                        self.build_decoder_layer(cfg.sparse_input_copy(), no_encoder_attn)
+                    )
+            # elif cfg.disable_sparsity_layers is not None and i in cfg.disable_sparsity_layers:
+            #     self.layers.append(
+            #         self.build_decoder_layer(cfg.disable_sparsity_copy(), no_encoder_attn)
+            #     )
+            else:
+                self.layers.append(self.build_decoder_layer(cfg, no_encoder_attn))
         self.num_layers = len(self.layers)
 
         if cfg.decoder.normalize_before and not cfg.no_decoder_final_norm:
@@ -140,6 +150,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
             self.build_output_projection(cfg, dictionary, embed_tokens)
 
         self.sparse_stats = {}
+        self.sparsification = self.cfg.sparse_fcs or self.cfg.sparse_preproj or self.cfg.sparse_attention
         
     def build_output_projection(self, cfg, dictionary, embed_tokens):
         if cfg.adaptive_softmax_cutoff is not None:
@@ -330,8 +341,8 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
         if self.cross_self_attention or prev_output_tokens.eq(self.padding_idx).any():
             self_attn_padding_mask = prev_output_tokens.eq(self.padding_idx)
 
-        if not self.training and self.cfg.sparse_proj:
-                self.sparse_stats = {}
+        if not self.training and self.sparsification:
+            self.sparse_stats = {}
 
         # decoder layers
         attn: Optional[Tensor] = None
@@ -353,7 +364,7 @@ class TransformerDecoderBase(FairseqIncrementalDecoder):
                 need_head_weights=bool((idx == alignment_layer)),
             )
 
-            if not self.training and self.cfg.sparse_proj:
+            if not self.training and self.sparsification:
                 for key in layer.sparse_stats.keys():
                     self.sparse_stats["{module}/layer_{layer_num}".format(module=key, layer_num=idx)] = layer.sparse_stats[key]
             

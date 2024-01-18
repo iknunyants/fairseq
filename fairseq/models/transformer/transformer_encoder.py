@@ -92,9 +92,22 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layers = LayerDropModuleList(p=self.encoder_layerdrop)
         else:
             self.layers = nn.ModuleList([])
-        self.layers.extend(
-            [self.build_encoder_layer(cfg) for i in range(cfg.encoder.layers)]
-        )
+        for i in range(cfg.encoder.layers):
+            if cfg.dense_input:
+                if i == 0:
+                    self.layers.append(
+                        self.build_encoder_layer(cfg)
+                    )
+                else:
+                    self.layers.append(
+                        self.build_encoder_layer(cfg.sparse_input_copy())
+                    )
+            # elif cfg.disable_sparsity_layers is not None and i in cfg.disable_sparsity_layers:
+            #     self.layers.append(
+            #         self.build_encoder_layer(cfg.disable_sparsity_copy())
+            #     )
+            else:
+                self.layers.append(self.build_encoder_layer(cfg))
         self.num_layers = len(self.layers)
 
         if cfg.encoder.normalize_before:
@@ -102,8 +115,9 @@ class TransformerEncoderBase(FairseqEncoder):
         else:
             self.layer_norm = None
 
-        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda)
         self.sparse_stats = {}
+        self.sparsification = self.cfg.sparse_fcs or self.cfg.sparse_preproj or self.cfg.sparse_attention
+        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda) if self.sparsification else None
 
     def build_encoder_layer(self, cfg):
         layer = transformer_layer.TransformerEncoderLayerBase(
@@ -228,7 +242,7 @@ class TransformerEncoderBase(FairseqEncoder):
         if return_all_hiddens:
             encoder_states.append(x)
 
-        if not self.training and self.cfg.sparse_proj:
+        if not self.training and self.sparsification:
                 self.sparse_stats = {}
 
         # encoder layers
@@ -237,7 +251,7 @@ class TransformerEncoderBase(FairseqEncoder):
                 x, encoder_padding_mask=encoder_padding_mask if has_pads else None
             )
 
-            if not self.training and self.cfg.sparse_proj:
+            if not self.training and self.sparsification:
                 for key in layer.sparse_stats.keys():
                     self.sparse_stats["{module}/layer_{layer_num}".format(module=key, layer_num=idx)] = layer.sparse_stats[key]
                 
@@ -256,7 +270,7 @@ class TransformerEncoderBase(FairseqEncoder):
         if self.layer_norm is not None:
             x = self.layer_norm(x)
 
-        if self.cfg.sparse_proj:
+        if self.cfg.sparse_preproj:
             x = self.sparsing_fn(x)
             if not self.training:
                 self.sparse_stats['encoder_out'] = utils.calc_sparsity(x)

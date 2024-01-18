@@ -90,6 +90,8 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         xformers_blocksparse_blocksize: Optional[
             int
         ] = 16,  # This should be part of the config
+        sparse_attention: bool = False,
+        sparsing_fn: callable = None,
     ):
         super().__init__(dictionary)
 
@@ -161,6 +163,11 @@ class MultiheadAttention(FairseqIncrementalDecoder):
         self.onnx_trace = False
         self.skip_embed_dim_check = False
         self.init_incremental_state()
+        self.sparse_attention = sparse_attention
+        if self.sparse_attention:
+            self.skip_embed_dim_check = True
+        self.sparsing_fn = sparsing_fn
+        self.sparse_stats = {}
 
     def prepare_for_onnx_export_(self):
         self.onnx_trace = True
@@ -691,6 +698,13 @@ class MultiheadAttention(FairseqIncrementalDecoder):
                 k=k, v=v, key_padding_mask=key_padding_mask, attn_mask=attn_mask
             )
 
+        if self.sparse_attention:
+            k, v, q = self.sparsing_fn(k), self.sparsing_fn(v), self.sparsing_fn(q)
+            if not self.training:
+                self.sparse_stats = {'attention_k': utils.calc_sparsity(k),
+                                     'attention_v': utils.calc_sparsity(v),
+                                     'attention_q': utils.calc_sparsity(q)}
+
         if self.encoder_decoder_attention and bsz != kv_bsz:
             attn_weights = torch.einsum(
                 "bxhtd,bhsd->bxhts",
@@ -770,7 +784,14 @@ class MultiheadAttention(FairseqIncrementalDecoder):
             attn = attn.contiguous().view(tgt_len, bsz, self.embed_dim)
         else:
             attn = attn.transpose(0, 1).contiguous().view(tgt_len, bsz, self.embed_dim)
+
+        if self.sparse_attention:
+            attn = self.sparsing_fn(attn)
+            if not self.training:
+                self.sparse_stats['attention_out'] = utils.calc_sparsity(attn)
+                
         attn = self.out_proj(attn)
+
         attn_weights: Optional[Tensor] = None
         if need_weights:
             attn_weights = attn_weights_float.view(

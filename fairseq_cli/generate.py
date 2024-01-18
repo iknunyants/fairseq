@@ -24,6 +24,7 @@ from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.logging import progress_bar
 from fairseq.logging.meters import StopwatchMeter, TimeMeter
 
+from fairseq.flops_computation import TransformerFlops
 
 def main(cfg: DictConfig):
 
@@ -184,8 +185,19 @@ def _main(cfg: DictConfig, output_file):
     num_sentences = 0
     has_target = True
     wps_meter = TimeMeter()
+    flops_res = []
     for sample in progress:
         sample = utils.move_to_cuda(sample) if use_cuda else sample
+        models[0].eval()
+        models[0](**sample['net_input'])
+        sparse_stats = models[0].decoder.sparse_stats
+        sparse_stats.update(models[0].encoder.sparse_stats)
+
+        dense_stats = {k: 1 - v / 100 for k, v in sparse_stats.items()}
+
+        flops_count = TransformerFlops(n_layers=saved_cfg['model'].encoder_layers, n_heads=saved_cfg['model'].encoder_attention_heads, d_model = saved_cfg['model'].encoder_embed_dim, vocab_size=37000)
+        flops_res.append(flops_count.batch_flops(sample['net_input']['src_tokens'].shape[1], sample['target'].shape[1], density_dict=dense_stats, bsz = sample['target'].shape[0], return_by_opp=True))
+
         if "net_input" not in sample:
             continue
 
@@ -366,6 +378,10 @@ def _main(cfg: DictConfig, output_file):
         num_sentences += (
             sample["nsentences"] if "nsentences" in sample else sample["id"].numel()
         )
+    flops_res = [sum(col) / len(flops_res) for col in zip(*flops_res)]
+    for i, flops_name in enumerate(['mm_flops', 'linear_flops', 'layernorm_flops']):
+        print(flops_name + ': ' + str(flops_res[i]), file=sys.stderr)
+    print("Overall flops: " + str(sum(flops_res)), file=sys.stderr)
 
     logger.info("NOTE: hypothesis and token scores are output in base 2")
     logger.info(

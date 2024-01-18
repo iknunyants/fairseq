@@ -545,7 +545,18 @@ def relu_squared(x: torch.Tensor):
     return F.relu(x).pow(2)
 
 def get_sparsing_fn(activation: str, hardshrink_lambda: float) -> Callable:
-    """Returns the sparsing activation function corresponding to `activation`"""
+    """Returns the sparsing activation function corresponding to `activation`.
+
+    Args:
+        activation (str): The type of activation function to use.
+        hardshrink_lambda (float): The lambda value for Hardshrink activation.
+
+    Returns:
+        Callable: The sparsing activation function.
+
+    Raises:
+        RuntimeError: If the specified activation function is not supported.
+    """
     if activation == "relu":
         return torch.nn.ReLU()
     if activation == "hardshrink":
@@ -554,15 +565,30 @@ def get_sparsing_fn(activation: str, hardshrink_lambda: float) -> Callable:
         raise RuntimeError("--sparsing-fn {} not supported".format(activation))
 
 def get_available_sparsing_fns() -> List:
+    """
+    Returns a list of available sparsing functions.
+
+    Returns:
+        List: A list of available sparsing functions.
+    """
     return [
         "relu", 
         "hardshrink"
     ]
 
 def calc_sparsity(net_activation):
-    net_activation = net_activation.detach()
-    num_nonzero = torch.count_nonzero(net_activation.detach())
-    percent_zero = 100.0 * (1.0 - (num_nonzero / net_activation.numel()))
+    """
+    Calculate the sparsity of a network activation tensor.
+
+    Parameters:
+        net_activation (torch.Tensor): The network activation tensor.
+
+    Returns:
+        float: The percentage of zero values in the tensor.
+    """
+    with torch.no_grad():
+        num_nonzero = torch.count_nonzero(net_activation)
+        percent_zero = 100.0 * (1.0 - (num_nonzero / net_activation.numel()))
     return percent_zero.item()
 
 def get_activation_fn(activation: str) -> Callable:
