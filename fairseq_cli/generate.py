@@ -94,12 +94,17 @@ def _main(cfg: DictConfig, output_file):
 
     # Load ensemble
     logger.info("loading model(s) from {}".format(cfg.common_eval.path))
+
+    strict_load = (cfg.checkpoint.checkpoint_shard_count == 1) and not (
+                    overrides.get('learnable', False)
+                )
+    
     models, saved_cfg = checkpoint_utils.load_model_ensemble(
         utils.split_paths(cfg.common_eval.path),
         arg_overrides=overrides,
         task=task,
         suffix=cfg.checkpoint.checkpoint_suffix,
-        strict=(cfg.checkpoint.checkpoint_shard_count == 1),
+        strict=strict_load,
         num_shards=cfg.checkpoint.checkpoint_shard_count,
     )
 

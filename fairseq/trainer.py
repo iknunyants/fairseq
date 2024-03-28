@@ -582,8 +582,16 @@ class Trainer(object):
                         layer._prune_fc_layer(remove_index=remove_index)
                     logger.info(self.model)
 
+                strict_load=True
+                if (
+                    safe_hasattr(self.model, "args")
+                    and safe_hasattr(self.model.args, "learnable")
+                    and self.model.args.learnable
+                ):
+                    strict_load=False
+                    
                 self.model.load_state_dict(
-                    state["model"], strict=True, model_cfg=self.cfg.model
+                    state["model"], strict=strict_load, model_cfg=self.cfg.model
                 )
                 # save memory for later steps
                 del state["model"]
