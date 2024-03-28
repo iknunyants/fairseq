@@ -1,11 +1,10 @@
 class TransformerFlops(object):
-    def __init__(self, n_layers, n_heads, d_model, vocab_size, d_ff = None, d_heads = None):
+    def __init__(self, n_layers, n_heads, d_model, d_ff = None, d_heads = None):
         self.n_layers = n_layers
         self.n_heads = n_heads
         self.d_model = d_model
         self.d_heads = d_heads if d_heads is not None else d_model / n_heads
         self.d_ff = d_ff if d_ff is not None else 4 * d_model
-        self.vocab_size = vocab_size
         
     def linear_flops(self, in_features, out_features, len, density=1.0):
         return 2 * in_features * out_features * len * density
@@ -71,7 +70,6 @@ class TransformerFlops(object):
 
             layernorm_flops += self.layernorm_flops(trg_len)
 
-        linear_flops += self.linear_flops(self.d_model, self.vocab_size, trg_len)
 
         return [mm_flops, linear_flops, layernorm_flops]
 

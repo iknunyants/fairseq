@@ -195,7 +195,7 @@ def _main(cfg: DictConfig, output_file):
 
         dense_stats = {k: 1 - v / 100 for k, v in sparse_stats.items()}
 
-        flops_count = TransformerFlops(n_layers=saved_cfg['model'].encoder_layers, n_heads=saved_cfg['model'].encoder_attention_heads, d_model = saved_cfg['model'].encoder_embed_dim, vocab_size=37000)
+        flops_count = TransformerFlops(n_layers=saved_cfg['model'].encoder_layers, n_heads=saved_cfg['model'].encoder_attention_heads, d_model = saved_cfg['model'].encoder_embed_dim)
         flops_res.append(flops_count.batch_flops(sample['net_input']['src_tokens'].shape[1], sample['target'].shape[1], density_dict=dense_stats, bsz = sample['target'].shape[0], return_by_opp=True))
 
         if "net_input" not in sample:
