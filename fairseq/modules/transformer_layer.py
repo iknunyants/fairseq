@@ -44,8 +44,12 @@ class TransformerEncoderLayerBase(nn.Module):
         self.sparse_fcs = cfg.sparse_fcs
         self.sparse_preproj = cfg.sparse_preproj
         self.sparse_attention = cfg.sparse_attention
-        self.sparsification = self.sparse_fcs or self.sparse_preproj or self.cfg.sparse_attention
-        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda) if self.sparsification else None
+
+        self.natural_sparsity = cfg.natural_sparsity or (cfg.sparse_attention 
+                                                         or cfg.sparse_fcs
+                                                         or cfg.sparse_preproj)
+        self.sparsing_fn_fc = utils.get_sparsing_fn(cfg) if self.sparse_fcs else None
+        self.sparsing_fn_proj = utils.get_sparsing_fn(cfg) if self.sparse_preproj and not self.dense_input else None
 
         self.self_attn = self.build_self_attention(self.embed_dim, cfg)
         self.self_attn_layer_norm = LayerNorm(self.embed_dim, export=cfg.export)
@@ -153,7 +157,7 @@ class TransformerEncoderLayerBase(nn.Module):
             qn_block_size=self.quant_noise_block_size,
             xformers_att_config=cfg.encoder.xformers_att_config,
             sparse_attention=self.sparse_attention,
-            sparsing_fn=self.sparsing_fn,
+            sparsing_fn=utils.get_sparsing_fn(cfg) if self.sparse_attention else None ,
         )
 
     def residual_connection(self, x, residual):
@@ -203,15 +207,15 @@ class TransformerEncoderLayerBase(nn.Module):
             attn_mask = attn_mask.masked_fill(
                 attn_mask.to(torch.bool), -1e8 if x.dtype == torch.float32 else -1e4
             )
-        if not self.training and self.sparsification: # if any sparsity and validation then init sparse stats
+        if not self.training: # if any sparsity and validation then init sparse stats
             self.sparse_stats = {}
 
         if self.sparse_preproj and not self.normalize_before and not self.dense_input:
             if self.dense_residuals:
                 residual = x
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
             else:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
                 residual = x
             if not self.training:
                 self.sparse_stats['enc_proj'] = utils.calc_sparsity(x)
@@ -220,7 +224,7 @@ class TransformerEncoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
             if self.sparse_preproj and not self.dense_input:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
                 if not self.training:
                     self.sparse_stats['enc_proj'] = utils.calc_sparsity(x)
         x, _ = self.self_attn(
@@ -245,9 +249,9 @@ class TransformerEncoderLayerBase(nn.Module):
         if self.sparse_fcs and not self.normalize_before:
             if self.dense_residuals:
                 residual = x
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
             else:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
                 residual = x
             if not self.training:
                 self.sparse_stats['enc_fc1'] = utils.calc_sparsity(x)
@@ -256,13 +260,13 @@ class TransformerEncoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
             if self.sparse_fcs:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
                 if not self.training:
                     self.sparse_stats['enc_fc1'] = utils.calc_sparsity(x)
         
         x = self.activation_fn(self.fc1(x))
 
-        if not self.training and self.sparse_fcs: 
+        if not self.training and self.natural_sparsity: 
             self.sparse_stats['enc_fc2'] = utils.calc_sparsity(x)
     
         x = self.activation_dropout_module(x)
@@ -327,8 +331,13 @@ class TransformerDecoderLayerBase(nn.Module):
         self.sparse_fcs = cfg.sparse_fcs
         self.sparse_preproj = cfg.sparse_preproj
         self.sparse_attention = cfg.sparse_attention
-        self.sparsification = self.sparse_fcs or self.sparse_preproj or cfg.sparse_attention
-        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda) if self.sparsification else None
+
+        self.natural_sparsity = cfg.natural_sparsity or (cfg.sparse_attention 
+                                                         or cfg.sparse_fcs
+                                                         or cfg.sparse_preproj)
+        self.sparsing_fn_fc = utils.get_sparsing_fn(cfg) if self.sparse_fcs else None
+        self.sparsing_fn_proj = utils.get_sparsing_fn(cfg) if self.sparse_preproj and not self.dense_input else None
+        self.sparsing_fn_cross = utils.get_sparsing_fn(cfg) if self.sparse_preproj else None
 
         self.self_attn = self.build_self_attention(
             self.embed_dim,
@@ -425,7 +434,7 @@ class TransformerDecoderLayerBase(nn.Module):
             qn_block_size=self.quant_noise_block_size,
             xformers_att_config=cfg.decoder.xformers_att_config,
             sparse_attention=self.sparse_attention,
-            sparsing_fn=self.sparsing_fn,
+            sparsing_fn=utils.get_sparsing_fn(cfg) if self.sparse_attention else None,
         )
 
     def build_encoder_attention(self, embed_dim, cfg):
@@ -440,7 +449,7 @@ class TransformerDecoderLayerBase(nn.Module):
             qn_block_size=self.quant_noise_block_size,
             xformers_att_config=cfg.encoder.xformers_att_config,
             sparse_attention=self.sparse_attention,
-            sparsing_fn=self.sparsing_fn,
+            sparsing_fn=utils.get_sparsing_fn(cfg) if self.sparse_attention else None,
         )
 
     def prepare_for_onnx_export_(self):
@@ -478,15 +487,15 @@ class TransformerDecoderLayerBase(nn.Module):
         if need_head_weights:
             need_attn = True
 
-        if not self.training and self.sparsification: # if any sparsity and validation then init sparse stats
+        if not self.training: # if any sparsity and validation then init sparse stats
             self.sparse_stats = {}
 
         if self.sparse_preproj and not self.normalize_before and not self.dense_input:
             if self.dense_residuals:
                 residual = x
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
             else:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
                 residual = x
             if not self.training:
                 self.sparse_stats['dec_proj'] = utils.calc_sparsity(x)
@@ -495,7 +504,7 @@ class TransformerDecoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
             if self.sparse_preproj and not self.dense_input:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_proj(x)
                 if not self.training:
                     self.sparse_stats['dec_proj'] = utils.calc_sparsity(x)
 
@@ -565,9 +574,9 @@ class TransformerDecoderLayerBase(nn.Module):
             if self.sparse_preproj and not self.normalize_before:
                 if self.dense_residuals:
                     residual = x
-                    x = self.sparsing_fn(x)
+                    x = self.sparsing_fn_cross(x)
                 else:
-                    x = self.sparsing_fn(x)
+                    x = self.sparsing_fn_cross(x)
                     residual = x
                 if not self.training:
                     self.sparse_stats['dec_cross'] = utils.calc_sparsity(x)
@@ -576,7 +585,7 @@ class TransformerDecoderLayerBase(nn.Module):
             if self.normalize_before:
                 x = self.self_attn_layer_norm(x)
                 if self.sparse_preproj:
-                    x = self.sparsing_fn(x)
+                    x = self.sparsing_fn_cross(x)
                     if not self.training:
                         self.sparse_stats['dec_cross'] = utils.calc_sparsity(x)
             if prev_attn_state is not None:
@@ -614,9 +623,9 @@ class TransformerDecoderLayerBase(nn.Module):
         if self.sparse_fcs and not self.normalize_before:
             if self.dense_residuals:
                 residual = x
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
             else:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
                 residual = x
             if not self.training:
                 self.sparse_stats['dec_fc1'] = utils.calc_sparsity(x)
@@ -625,13 +634,13 @@ class TransformerDecoderLayerBase(nn.Module):
         if self.normalize_before:
             x = self.self_attn_layer_norm(x)
             if self.sparse_fcs:
-                x = self.sparsing_fn(x)
+                x = self.sparsing_fn_fc(x)
                 if not self.training:
                     self.sparse_stats['dec_fc1'] = utils.calc_sparsity(x)
 
         x = self.activation_fn(self.fc1(x))
         
-        if not self.training and self.sparse_fcs:
+        if not self.training and self.natural_sparsity:
             self.sparse_stats['dec_fc2'] = utils.calc_sparsity(x)
 
         x = self.activation_dropout_module(x)

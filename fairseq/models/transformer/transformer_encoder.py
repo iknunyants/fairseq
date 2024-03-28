@@ -116,8 +116,7 @@ class TransformerEncoderBase(FairseqEncoder):
             self.layer_norm = None
 
         self.sparse_stats = {}
-        self.sparsification = self.cfg.sparse_fcs or self.cfg.sparse_preproj or self.cfg.sparse_attention
-        self.sparsing_fn = utils.get_sparsing_fn(activation=cfg.sparsing_fn, hardshrink_lambda=cfg.hardshrink_lambda) if self.sparsification else None
+        self.sparsing_fn = utils.get_sparsing_fn(cfg) if self.cfg.sparse_preproj else None
 
     def build_encoder_layer(self, cfg):
         layer = transformer_layer.TransformerEncoderLayerBase(
@@ -242,8 +241,8 @@ class TransformerEncoderBase(FairseqEncoder):
         if return_all_hiddens:
             encoder_states.append(x)
 
-        if not self.training and self.sparsification:
-                self.sparse_stats = {}
+        if not self.training:
+            self.sparse_stats = {}
 
         # encoder layers
         for idx, layer in enumerate(self.layers):
@@ -251,7 +250,7 @@ class TransformerEncoderBase(FairseqEncoder):
                 x, encoder_padding_mask=encoder_padding_mask if has_pads else None
             )
 
-            if not self.training and self.sparsification:
+            if not self.training:
                 for key in layer.sparse_stats.keys():
                     self.sparse_stats["{module}/layer_{layer_num}".format(module=key, layer_num=idx)] = layer.sparse_stats[key]
                 
