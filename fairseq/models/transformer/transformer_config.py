@@ -119,8 +119,30 @@ class TransformerConfig(FairseqDataclass):
         default="relu",
         metadata={"help": "sparsing activation function to use"},
     )
+    natural_sparsity: bool = False
     hardshrink_lambda: float = field(
         default=0.1, metadata={"help": "hardshrink lambda value"}
+    )
+    topk_k: int = field(
+        default=256, metadata={"help": "topk k value"}
+    )
+    learnable: bool = field(
+        default=False, metadata={"help": "if true, the sparsing function is learnable"}
+    )
+    shift: float = field(
+        default=-1.0, metadata={"help": "shift value for the sparsing function"}
+    )
+    fatrelu_threshold: float = field(
+        default=1e-7, metadata={"help": "initial threshold for the fatrelu sparsing function"}
+    )
+    init_sparsing_fn_ratio: float = field(
+        default=None, metadata={"help": "initial ratio of sparsity for the sparsing function"}
+    )
+    init_sparsing_fn_mode: str = field(
+        default="channel", metadata={"help": "initializaion mode for the sparsing function"}
+    )
+    freeze_weights: str = field(
+        default='none', metadata={"help": "freeze weights of the model"}
     )
     activation_fn: ChoiceEnum(utils.get_available_activation_fns()) = field(
         default="relu",

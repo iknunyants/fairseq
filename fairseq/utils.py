@@ -543,8 +543,192 @@ def deprecation_warning(message, stacklevel=3):
 
 def relu_squared(x: torch.Tensor):
     return F.relu(x).pow(2)
+ 
+class Binarize(torch.autograd.Function): # same as a spike function
+    """
+    Spike function with derivative of arctan surrogate gradient.
+    Featured in Fang et al. 2020/2021.
+    """
+ 
+    @staticmethod
+    def forward(ctx, x, width):
+        ctx.save_for_backward(x, width)
+        out = x.gt(0).type_as(x)
+        return out
+ 
+    @staticmethod
+    def backward(ctx, grad_output):
+        x, width = ctx.saved_tensors
+        grad_input = grad_output.clone()
+ 
+        sg = 1 / (1 + width * x * x)
+           
+        return grad_input * sg, None
+ 
+ 
+class FATReLU(torch.nn.Module):
+    """ FatReLU activation function """
+ 
+    def __init__(self, init_threshold=1e-7, embed_dim=512, width=torch.tensor(5.0)):
+        """
+ 
+        Args:
+            threshold (tensor): threshold parameters
+            width (tensor, optional): width of surrogate function. Defaults to torch.tensor(10.0).
+        """
+        super().__init__()
+        self.threshold = torch.nn.Parameter(torch.full((embed_dim, ), init_threshold) + 
+                                                 torch.rand(embed_dim) * 1e-8)
+        self.width = width
+        self.binarize = Binarize.apply
+        self.relu = torch.nn.ReLU()
 
-def get_sparsing_fn(activation: str, hardshrink_lambda: float) -> Callable:
+    def reinit_params(self, threshold):
+        device = self.threshold.device
+        init_type = self.threshold.dtype
+        if torch.is_tensor(threshold) and sum(threshold.shape) != 0:
+            self.threshold.data = threshold.detach().clone()
+        else:
+            self.threshold.data = torch.full(self.threshold.data.size(), threshold)
+        self.threshold.data = self.threshold.data.to(device).type(init_type)
+            
+        
+    def forward(self, data):
+        """forward function
+ 
+        Args:
+            data (tensor): input data
+ 
+        Returns:
+            tensor: output data
+            tensor: data before performing fatrelu
+        """
+        data = self.relu(data)
+        activation_map = self.binarize(data - torch.abs(self.threshold), self.width)
+        data = data * activation_map
+        return data
+    
+def init_fatrelu_thresholds(model, sparsing_fn_ratio, task, criterion, cfg=None, init_itr=None, mode='channel'):
+    if init_itr is None:
+        dataset_name = 'train'
+        task.load_dataset(dataset_name)
+        init_itr = task.get_batch_iterator(
+            dataset=task.dataset(dataset_name),
+            max_tokens=cfg.dataset.max_tokens,
+            max_sentences=cfg.dataset.batch_size,
+            max_positions=resolve_max_positions(
+                task.max_positions(), *[model.max_positions()]
+            ),
+            ignore_invalid_inputs=cfg.dataset.skip_invalid_size_inputs_valid_test,
+            required_batch_size_multiple=cfg.dataset.required_batch_size_multiple,
+            seed=cfg.common.seed,
+            num_shards=cfg.distributed_training.distributed_world_size,
+            shard_id=cfg.distributed_training.distributed_rank,
+            num_workers=cfg.dataset.num_workers,
+            data_buffer_size=cfg.dataset.data_buffer_size,
+        )
+    class Hook:
+        def __init__(self, module, name):
+            self.hook = module.register_forward_hook(self.hook_fn)
+            self.activations = []
+            self.module = module
+            self.name = name
+
+        def hook_fn(self, module, input, output):
+            self.activations.append(output)
+
+        def close(self):
+            self.hook.remove()
+                
+    for name, module in model.named_modules():
+        if 'sparsing' in name.split('.')[-1]:
+            module.reinit_params(0.0)
+            hook = Hook(module, name)
+            act_num = 0
+            for sample in init_itr.next_epoch_itr(shuffle=False, set_dataset_epoch=False):
+                sample = move_to_cuda(sample)
+                _, _, _ = task.valid_step(sample, model, criterion)
+                act_num += sample['net_input']['src_tokens'].numel()
+                if act_num > 150000:
+                    break
+                
+            
+            activations = torch.cat([torch.flatten(ten, 0, -2) for ten in hook.activations]).float()
+
+            if mode == 'channel':
+                activations = activations.masked_fill_(activations == 0, float('nan'))
+                quants = torch.nan_to_num(torch.nanquantile(activations, sparsing_fn_ratio, interpolation='linear', keepdim=False, dim=0), nan=1e-3)
+                module.reinit_params(quants)
+            elif mode == 'global':
+                activations = activations.mean(0)
+                activations = activations.masked_fill_(activations == 0, float('nan'))
+                quants = torch.nanquantile(activations, sparsing_fn_ratio, interpolation='linear', keepdim=False, dim=0).item()
+                module.reinit_params(quants)
+            else:
+                raise ValueError(f"Mode {mode} not supported")
+            hook.close()
+
+    logger.info(f"Sparsing function parameters were initialized with {sparsing_fn_ratio} quantile of activations and mode {mode}", file=sys.stderr)
+        
+
+def freeze_weights(model, mode):
+    if mode == 'all':
+        for name, param in model.named_parameters():
+            if 'sparsing_fn' not in name:
+                param.requires_grad = False
+class ShiftedReLU(torch.nn.Module):
+    def __init__(self, shift: float = 1.0, embed_dim=512, learnable: bool = False):
+        super().__init__()
+        if learnable:
+            self.shifts = torch.nn.Parameter(torch.full((embed_dim,), shift))
+        else:
+            self.shifts = torch.full((embed_dim,), shift)
+
+    def reinit_params(self, shift):
+        device = self.shifts.device
+        init_type = shift.dtype
+        if sum(shift.shape) != 0:
+            self.shifts.data = shift
+        else:
+            self.shifts.data = torch.full(self.shifts.data.size(), shift)
+        self.shifts.data = self.shifts.data.to(device).type(init_type)
+
+    def forward(self, x: torch.Tensor):
+        return F.relu(x - self.shifts)
+
+class ReLU2(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x: torch.Tensor):
+        return F.relu(x).pow(2)
+
+class TopK(torch.nn.Module):
+    def __init__(self, k: int = 1):
+        super().__init__()
+        self.k = k
+
+    def forward(self, x: torch.Tensor):
+        inv_k = x.size(-1) - self.k
+        _, indices = torch.topk(torch.abs(x), inv_k, dim=-1, largest=False)
+        x = x.scatter(dim=-1, index=indices, value=0)
+
+        return x
+
+class ReLUTopK(torch.nn.Module):
+    def __init__(self, k: int = 1):
+        super().__init__()
+        self.k = k
+
+    def forward(self, x: torch.Tensor):
+        x = F.relu(x)
+        inv_k = x.size(-1) - self.k
+        _, indices = torch.topk(torch.abs(x), inv_k, dim=-1, largest=False)
+        x = x.scatter(dim=-1, index=indices, value=0)
+
+        return x
+
+def get_sparsing_fn(cfg) -> Callable:
     """Returns the sparsing activation function corresponding to `activation`.
 
     Args:
@@ -557,12 +741,22 @@ def get_sparsing_fn(activation: str, hardshrink_lambda: float) -> Callable:
     Raises:
         RuntimeError: If the specified activation function is not supported.
     """
-    if activation == "relu":
+    if cfg.sparsing_fn == "relu":
         return torch.nn.ReLU()
-    if activation == "hardshrink":
-        return torch.nn.Hardshrink(hardshrink_lambda)
+    elif cfg.sparsing_fn == "relu2":
+        return ReLU2()
+    elif cfg.sparsing_fn == "hardshrink":
+        return torch.nn.Hardshrink(cfg.hardshrink_lambda)
+    elif cfg.sparsing_fn == "shifted_relu":
+        return ShiftedReLU(cfg.shift, cfg.encoder_embed_dim, cfg.learnable)
+    elif cfg.sparsing_fn == "fatrelu":
+        return FATReLU(cfg.fatrelu_threshold, cfg.encoder_embed_dim)
+    elif cfg.sparsing_fn == "topk":
+        return TopK(cfg.topk_k)
+    elif cfg.sparsing_fn == "relu_topk":
+        return ReLUTopK(cfg.topk_k)
     else:
-        raise RuntimeError("--sparsing-fn {} not supported".format(activation))
+        raise RuntimeError("--sparsing-fn {} not supported".format(cfg.sparsing_fn))
 
 def get_available_sparsing_fns() -> List:
     """
@@ -573,7 +767,12 @@ def get_available_sparsing_fns() -> List:
     """
     return [
         "relu", 
-        "hardshrink"
+        "hardshrink",
+        "shifted_relu", 
+        "fatrelu", 
+        "relu2", 
+        "topk",
+        "relu_topk"
     ]
 
 def calc_sparsity(net_activation):

@@ -95,6 +95,10 @@ def main(cfg: FairseqConfig) -> None:
     else:
         model = task.build_model(cfg.model)
     criterion = task.build_criterion(cfg.criterion)
+
+    if getattr(cfg.model, "freeze_weights", None) is not None:
+        utils.freeze_weights(model, cfg.model.freeze_weights)
+        
     logger.info(model)
     logger.info("task: {}".format(task.__class__.__name__))
     logger.info("model: {}".format(model.__class__.__name__))
@@ -189,6 +193,25 @@ def main(cfg: FairseqConfig) -> None:
             for _ in itr:
                 pass
     # TODO: end of dry run section
+
+    suffix = trainer.checkpoint_suffix
+    checkpoint_path = os.path.join(
+        cfg.checkpoint.save_dir, "checkpoint_last{}.pt".format(suffix)
+    )
+    first_launch = not PathManager.exists(checkpoint_path)
+    if (
+        getattr(cfg.model, "init_sparsing_fn_ratio", None) is not None 
+        and first_launch 
+        and cfg.checkpoint.finetune_from_model is not None
+        and getattr(cfg.model, "learnable", False)
+        ):
+        
+        sparsing_fn_ratio = cfg.model.init_sparsing_fn_ratio
+        init_subset = valid_subsets[0]
+        init_itr = trainer.get_valid_iterator(init_subset)
+
+        utils.init_fatrelu_thresholds(trainer.model, sparsing_fn_ratio, task, criterion, cfg=cfg)
+
 
     train_meter = meters.StopwatchMeter()
     train_meter.start()
@@ -329,6 +352,11 @@ def train(
             "train_step-%d" % i
         ):
             log_output = trainer.train_step(samples)
+
+        if getattr(cfg.model, "sparsing_fn", None) == 'fatrelu' and cfg.criterion.clamp_thresholds:
+            for name, weights in trainer.model.named_parameters():
+                if 'threshold' in name:
+                    weights.data.clamp_(min=1e-7)
 
         if log_output is not None:  # not OOM, overflow, ...
             # log mid-epoch stats

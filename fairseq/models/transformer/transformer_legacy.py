@@ -160,6 +160,7 @@ def transformer_sparse(args):
     args.sparse_fcs = getattr(args, "sparse_fcs", False)
     args.sparsing_fn = getattr(args, "sparsing_fn", 'relu')
     args.hardshrink_lambda = getattr(args, "hardshrink_lambda", 0.1)
+    # args.init_sparsing_fn_ratio = getattr(args, "init_sparsing_fn_ratio", 0.1)
     # args.disable_sparsity_layers = getattr(args, "disable_sparsity_layers", None)
     # args.disable_sparsity_layers_level = getattr(args, "disable_sparsity_layers_level", 3)
     args.dense_residuals = getattr(args, "dense_residuals", False)

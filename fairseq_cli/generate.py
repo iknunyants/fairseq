@@ -139,6 +139,12 @@ def _main(cfg: DictConfig, output_file):
             model.cuda()
         model.prepare_for_inference_(cfg)
 
+    if 'init_sparsing_fn_ratio' in overrides:
+        sparsing_fn_ratio = overrides['init_sparsing_fn_ratio']
+        init_sparsing_fn_mode = overrides.get('init_sparsing_fn_mode', 'channel')
+        criterion = task.build_criterion(cfg.criterion)
+        utils.init_fatrelu_thresholds(models[0], sparsing_fn_ratio, task, criterion, cfg=cfg, init_itr=None, mode=init_sparsing_fn_mode)
+        
     # Load alignment dictionary for unknown word replacement
     # (None if no unknown word replacement, empty if no path to align dictionary)
     align_dict = utils.load_align_dict(cfg.generation.replace_unk)
